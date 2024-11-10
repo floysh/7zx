@@ -23,6 +23,8 @@
 #endif
 #endif
 
+#define kInputBufSize ((size_t)1 << 18)
+
 static ISzAlloc g_Alloc = { SzAlloc, SzFree };
 
 static int Buf_EnsureSize(CBuf *dest, size_t size)
@@ -37,7 +39,7 @@ static int Buf_EnsureSize(CBuf *dest, size_t size)
 
 static Byte kUtf8Limits[5] = { 0xC0, 0xE0, 0xF0, 0xF8, 0xFC };
 
-static Bool Utf16_To_Utf8(Byte *dest, size_t *destLen, const UInt16 *src, size_t srcLen)
+static BoolInt Utf16_To_Utf8(Byte *dest, size_t *destLen, const UInt16 *src, size_t srcLen)
 {
   size_t destPos = 0, srcPos = 0;
   for (;;)
@@ -89,7 +91,7 @@ static Bool Utf16_To_Utf8(Byte *dest, size_t *destLen, const UInt16 *src, size_t
 static SRes Utf16_To_Utf8Buf(CBuf *dest, const UInt16 *src, size_t srcLen)
 {
   size_t destLen = 0;
-  Bool res;
+  BoolInt res;
   Utf16_To_Utf8(NULL, &destLen, src, srcLen);
   destLen += 1;
   if (!Buf_EnsureSize(dest, destLen))
@@ -266,7 +268,7 @@ static void ConvertFileTimeToString(const CNtfsFileTime *nt, char *s)
 }
 
 #ifdef USE_WINDOWS_FILE
-static void GetAttribString(UInt32 wa, Bool isDir, char *s)
+static void GetAttribString(UInt32 wa, BoolInt isDir, char *s)
 {
   s[0] = (char)(((wa & FILE_ATTRIBUTE_DIRECTORY) != 0 || isDir) ? 'D' : '.');
   s[1] = (char)(((wa & FILE_ATTRIBUTE_READONLY ) != 0) ? 'R': '.');
@@ -276,7 +278,7 @@ static void GetAttribString(UInt32 wa, Bool isDir, char *s)
   s[5] = '\0';
 }
 #else
-static void GetAttribString(UInt32, Bool, char *s)
+static void GetAttribString(UInt32, BoolInt, char *s)
 {
   s[0] = '\0';
 }
@@ -284,10 +286,10 @@ static void GetAttribString(UInt32, Bool, char *s)
 
 // #define NUM_PARENTS_MAX 128
 
-SRes SzxExtract(const char* filename, Bool fullPaths)
+SRes SzxExtract(const char* filename, BoolInt fullPaths)
 {
   CFileInStream archiveStream;
-  CLookToRead lookStream;
+  CLookToRead2 lookStream;
   CSzArEx db;
   SRes res;
   ISzAlloc allocImp;
@@ -300,11 +302,9 @@ SRes SzxExtract(const char* filename, Bool fullPaths)
   g_FileCodePage = AreFileApisANSI() ? CP_ACP : CP_OEMCP;
   #endif
 
-  allocImp.Alloc = SzAlloc;
-  allocImp.Free = SzFree;
+  allocImp = g_Alloc;
 
-  allocTempImp.Alloc = SzAllocTemp;
-  allocTempImp.Free = SzFreeTemp;
+  allocTempImp = g_Alloc;
 
   #ifdef UNDER_CE
   if (InFile_OpenW(&archiveStream.file, L"\test.7z"))
@@ -316,15 +316,26 @@ SRes SzxExtract(const char* filename, Bool fullPaths)
   }
 
   FileInStream_CreateVTable(&archiveStream);
-  LookToRead_CreateVTable(&lookStream, False);
+  archiveStream.wres = 0;
+  LookToRead2_CreateVTable(&lookStream, False);
+  lookStream.buf = NULL;
 
-  lookStream.realStream = &archiveStream.s;
-  LookToRead_Init(&lookStream);
+  {
+    lookStream.buf = (Byte *)ISzAlloc_Alloc(&allocImp, kInputBufSize);
+    if (!lookStream.buf)
+      res = SZ_ERROR_MEM;
+    else
+    {
+      lookStream.bufSize = kInputBufSize;
+      lookStream.realStream = &archiveStream.vt;
+      LookToRead2_INIT(&lookStream)
+    }
+  }
 
   CrcGenerateTable();
 
   SzArEx_Init(&db);
-  res = SzArEx_Open(&db, &lookStream.s, &allocImp, &allocTempImp);
+  res = SzArEx_Open(&db, &lookStream.vt, &allocImp, &allocTempImp);
   if (res == SZ_OK)
   {
     UInt32 i;
@@ -372,7 +383,7 @@ SRes SzxExtract(const char* filename, Bool fullPaths)
 
       if (!isDir)
       {
-        res = SzArEx_Extract(&db, &lookStream.s, i,
+        res = SzArEx_Extract(&db, &lookStream.vt, i,
             &blockIndex, &outBuffer, &outBufferSize,
             &offset, &outSizeProcessed,
             &allocImp, &allocTempImp);
@@ -437,7 +448,7 @@ SRes SzxExtract(const char* filename, Bool fullPaths)
 SRes SzxList(const char* filename, char* list, size_t* size)
 {
   CFileInStream archiveStream;
-  CLookToRead lookStream;
+  CLookToRead2 lookStream;
   CSzArEx db;
   SRes res;
   ISzAlloc allocImp;
@@ -450,11 +461,9 @@ SRes SzxList(const char* filename, char* list, size_t* size)
   g_FileCodePage = AreFileApisANSI() ? CP_ACP : CP_OEMCP;
   #endif
 
-  allocImp.Alloc = SzAlloc;
-  allocImp.Free = SzFree;
+  allocImp = g_Alloc;
 
-  allocTempImp.Alloc = SzAllocTemp;
-  allocTempImp.Free = SzFreeTemp;
+  allocTempImp = g_Alloc;
 
   #ifdef UNDER_CE
   if (InFile_OpenW(&archiveStream.file, L"\test.7z"))
@@ -466,15 +475,26 @@ SRes SzxList(const char* filename, char* list, size_t* size)
   }
 
   FileInStream_CreateVTable(&archiveStream);
-  LookToRead_CreateVTable(&lookStream, False);
+  archiveStream.wres = 0;
+  LookToRead2_CreateVTable(&lookStream, False);
+  lookStream.buf = NULL;
 
-  lookStream.realStream = &archiveStream.s;
-  LookToRead_Init(&lookStream);
+  {
+    lookStream.buf = (Byte *)ISzAlloc_Alloc(&allocImp, kInputBufSize);
+    if (!lookStream.buf)
+      res = SZ_ERROR_MEM;
+    else
+    {
+      lookStream.bufSize = kInputBufSize;
+      lookStream.realStream = &archiveStream.vt;
+      LookToRead2_INIT(&lookStream)
+    }
+  }
 
   CrcGenerateTable();
 
   SzArEx_Init(&db);
-  res = SzArEx_Open(&db, &lookStream.s, &allocImp, &allocTempImp);
+  res = SzArEx_Open(&db, &lookStream.vt, &allocImp, &allocTempImp);
   if (res == SZ_OK)
   {
     UInt32 i;
@@ -490,7 +510,7 @@ SRes SzxList(const char* filename, char* list, size_t* size)
     {
       // const CSzFileItem *f = db.Files + i;
       size_t len;
-      int isDir = SzArEx_IsDir(&db, i);
+      const BoolInt isDir = SzArEx_IsDir(&db, i);
       len = SzArEx_GetFileNameUtf16(&db, i, NULL);
       // len = SzArEx_GetFullNameLen(&db, i);
 
@@ -590,7 +610,7 @@ SRes SzxList(const char* filename, char* list, size_t* size)
 SRes SzxTest(const char* filename)
 {
   CFileInStream archiveStream;
-  CLookToRead lookStream;
+  CLookToRead2 lookStream;
   CSzArEx db;
   SRes res;
   ISzAlloc allocImp;
@@ -603,11 +623,9 @@ SRes SzxTest(const char* filename)
   g_FileCodePage = AreFileApisANSI() ? CP_ACP : CP_OEMCP;
   #endif
 
-  allocImp.Alloc = SzAlloc;
-  allocImp.Free = SzFree;
+  allocImp = g_Alloc;
 
-  allocTempImp.Alloc = SzAllocTemp;
-  allocTempImp.Free = SzFreeTemp;
+  allocTempImp = g_Alloc;
 
   #ifdef UNDER_CE
   if (InFile_OpenW(&archiveStream.file, L"\test.7z"))
@@ -619,15 +637,26 @@ SRes SzxTest(const char* filename)
   }
 
   FileInStream_CreateVTable(&archiveStream);
-  LookToRead_CreateVTable(&lookStream, False);
+  archiveStream.wres = 0;
+  LookToRead2_CreateVTable(&lookStream, False);
+  lookStream.buf = NULL;
 
-  lookStream.realStream = &archiveStream.s;
-  LookToRead_Init(&lookStream);
+  {
+    lookStream.buf = (Byte *)ISzAlloc_Alloc(&allocImp, kInputBufSize);
+    if (!lookStream.buf)
+      res = SZ_ERROR_MEM;
+    else
+    {
+      lookStream.bufSize = kInputBufSize;
+      lookStream.realStream = &archiveStream.vt;
+      LookToRead2_INIT(&lookStream)
+    }
+  }
 
   CrcGenerateTable();
 
   SzArEx_Init(&db);
-  res = SzArEx_Open(&db, &lookStream.s, &allocImp, &allocTempImp);
+  res = SzArEx_Open(&db, &lookStream.vt, &allocImp, &allocTempImp);
   if (res == SZ_OK)
   {
     UInt32 i;
@@ -675,7 +704,7 @@ SRes SzxTest(const char* filename)
 
       if (!isDir)
       {
-        res = SzArEx_Extract(&db, &lookStream.s, i,
+        res = SzArEx_Extract(&db, &lookStream.vt, i,
             &blockIndex, &outBuffer, &outBufferSize,
             &offset, &outSizeProcessed,
             &allocImp, &allocTempImp);

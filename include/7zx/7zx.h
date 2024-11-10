@@ -19,7 +19,7 @@ extern "C" {
 /// \return SZ_OK if successful
 ///
 ////////////////////////////////////////////////////////////
-extern SRes SzxExtract(const char* filename, Bool fullPaths = 1);
+extern SRes SzxExtract(const char* filename, BoolInt fullPaths);
 
 ////////////////////////////////////////////////////////////
 /// \brief List the content of an 7z archive
